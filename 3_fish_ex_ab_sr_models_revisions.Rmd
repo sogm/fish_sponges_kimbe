@@ -1,0 +1,438 @@
+---
+title: "fish_encrusting_sponges_ecology_ex_ab_sr_models"
+author: "SGM"
+date: '2025-04-17'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Attach the packages
+
+```{r, warning = FALSE}
+library(betareg)
+library(grid)
+library(dplyr)
+library(gridExtra)
+library(scales)
+library(car)
+library(ggplot2)
+library(ggfortify)
+library(broom)
+library(effects)
+library(emmeans)
+library(MASS)
+library(MuMIn)
+library(coda)
+library(devtools)
+library(forcats)
+library(tidyverse)
+library(viridis)
+library(nlme)
+library(extrafont)
+library(DHARMa)
+library(ggrepel)
+library(brms)
+library(glmmTMB)
+```
+
+FISHES ##1. LOADING DATA FOR ALL SPECIES EXPERIMENTAL APPROACH\`
+
+```{r}
+sp_initial_ex <- read.csv("TO_BE_SET_BY_USER/fish_asse_sp_rda_ex_sampling_1_4.csv", head=T, stringsAsFactors = F, fileEncoding = "latin1")
+env_initial_ex <- read.csv("TO_BE_SET_BY_USER/environmental_data_all_ex_sampling_1_4.csv", head=T, stringsAsFactors = F, fileEncoding = "latin1")
+```
+
+```{r}
+sp_ex_nmdsr <- sp_ex_final[,-c(1:7)]
+env_ex_nmsr <- env_ex_final[,-c(1:7)]
+```
+
+# 2. ABUNDANCE MODEL FOR REMOVAL EXPERIMENT:DATA MATRIX WITH ABUNDANCE, RICHNESS AND ALL ENVIRONMENTAL VARIABLES
+
+## EXPERIMENTAL PART ADDING THE ABUNDANCE OF ALL THE SPECIES PER ROW
+
+```{r}
+sp_ex_final$ID<-seq.int(nrow(sp_ex_final))
+sp_ex_finalsum<-sp_ex_final %>% rowwise (ID) 
+```
+
+```{r}
+sp_ex_finalsum <-sp_ex_finalsum %>% mutate(total=sum(c_across(8:144)))
+sp_ex_finalsum <-sp_ex_finalsum %>% mutate(Richness=sum(c_across(8:144)>0))
+```
+
+```{r}
+EAbundance = sp_ex_finalsum$total# column of abundance 96 points
+ERichness = sp_ex_finalsum$Richness# column of Richness 96 points
+ETime = factor(sp_ex_finalsum$Time)# Column with tuime of the treatment two categories, before and after*108
+ESampling = sp_ex_finalsum$Sampling# column of Sampling 96 points
+ETreatment = factor(sp_ex_finalsum$Treatment)# column of treatment 96 points
+EQuadrat = factor(sp_ex_finalsum$Quadrat)# column of Quadrat 96 points
+EQuadrat_code = sp_ex_finalsum$Quadrat_code# column of Quadrat_code 96 points
+EDepth= env_ex_final$Depth# column of depth 96 points
+ESponge_cover=env_ex_final$Sponge_cover # column of sponge_cover 96 points
+ERugosity= env_ex_final$ Rugosity# column of rugosity 96 points
+ECoral_cover= env_ex_final$ Coral_Cover # column of coral_cover 96 points
+EOther_cover= env_ex_final$ Other_cover # column of other_cover 96 points
+EGtime = env_ex_final$Gtime
+Ebiototal_env = data.frame (EAbundance, ERichness,ETime, EGtime, ESampling,  ETreatment, EQuadrat, EQuadrat_code, EDepth, ESponge_cover, ERugosity, ECoral_cover,  EOther_cover)
+```
+
+```{r}
+set.seed(8)
+```
+
+```{r}
+Ebiototal_env<-Ebiototal_env %>% mutate(ETreatment=factor(ETreatment, levels=c("High", "Removal")),  ETime=factor(ETime, levels=c("B1", "A1", "A2", "A3")))
+```
+
+```{r}
+Esp_fish1_inter<-glmmTMB(EAbundance~ETreatment*ETime + ERugosity + ECoral_cover+ EDepth + (1|EQuadrat/ETime), data=Ebiototal_env,
+                  family=nbinom2(link = "log"),  REML=TRUE)#nbinom2
+```
+
+```{r}
+Esp_fish1_res_inter<-simulateResiduals(Esp_fish1_inter)
+plot(Esp_fish1_res_inter)
+```
+
+```{r}
+Anova(Esp_fish1_inter)
+```
+
+```{r}
+summary(Esp_fish1_inter)
+```
+
+```{r}
+allEffects(Esp_fish1_inter, type="response")
+```
+
+```{r}
+plot(allEffects(Esp_fish1_inter, type="response"))
+```
+
+```{r}
+Esp_fish1_grid_inter = with(Ebiototal_env, list(ETreatment = levels(ETreatment), ETime = levels(ETime)))
+```
+
+```{r}
+Esp_fish1.data_inter= emmeans(Esp_fish1_inter, ~ETreatment|ETime, at=Esp_fish1_grid_inter, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+Esp_fish1.data_inter
+```
+
+```{r, GB-fig3}
+f5 <-ggplot(Esp_fish1.data_inter,  aes(y=response, x=ETime, color=ETreatment))+
+    geom_pointrange(aes(ymin = asymp.LCL, ymax= asymp.UCL), position=position_dodge(width=0.9), size=1)+
+    geom_errorbar(aes(ymin= asymp.LCL, ymax= asymp.UCL), position=position_dodge(width=0.9), size=0.1, width=0.1)+
+  scale_y_continuous(breaks=seq(0,300,50), limits=c(0,300))+
+  
+  scale_color_manual(name = "Treatment",
+                     labels = c("High (Control)","Removal(Treatment)"),
+                     values = c("hotpink4", "black")) +
+  scale_fill_manual(name = "Treatment",
+                    labels = c("High (Control)","Removal(Treatment)"),
+                    values = c("hotpink4", "black"))+
+  scale_shape_manual(name = "Treatment",
+                     labels = c("High (Control)","Removal(Treatment)"),
+                     values = c(21, 21))+
+  
+  ylab("Abundance (Mean±95% CI)\n")+
+  xlab("\nSampling Time")+
+  labs(colour="Treatment")+
+  theme(legend.position =c("right"), 
+        axis.title.x = element_text(color="black", size=18, face=1),
+        axis.title.y = element_text(color="black", size=18, face=1),
+        axis.text.x = element_text(colour = "black", size=14, face=1), 
+        axis.text.y = element_text(colour = "black", size=14, face=1), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face=1, size=12))
+f5 + geom_point(data=Ebiototal_env, aes(x = ETime, y=EAbundance, fill=ETreatment, alpha= 0.5), size=3,   shape = 21, col="black", position = position_jitterdodge(jitter.width = 0.5, jitter.height=0.4, dodge.width=0.9))
+```
+
+```{r}
+Esp_fish1f_grid1 = with(Ebiototal_env, list(ERugosity = seq(min(ERugosity), max(ERugosity), len=100)))
+```
+
+```{r}
+Esp_fish1f.data1 = emmeans(Esp_fish1_inter, ~ERugosity, at=Esp_fish1f_grid1, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f5B<-ggplot(Esp_fish1f.data1, aes(x=ERugosity)) +
+  geom_line(data= Esp_fish1f.data1 , aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data=Esp_fish1f.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,300,50), limits=c(0,300))+
+  scale_x_continuous(breaks=seq(0,1,0.1), limits=c(0.4,0.75))+
+  ylab("Abundance (Mean ± 95% CI)\n")+
+  xlab("\nSubstratum complexity")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f5B+geom_point(data=Ebiototal_env, aes(x = ERugosity, y=EAbundance, fill= ETreatment), size=3, alpha=0.6, shape = 21, col="black")+
+  scale_color_manual(values = c("black","hotpink4")) +
+  scale_fill_manual(values = c("black","hotpink4"))+
+  labs(fill="Sponge cover", colour="Sponge cover")#+
+```
+
+```{r}
+Esp_fish1f_grid1 = with(Ebiototal_env, list(ECoral_cover = seq(min(ECoral_cover), max(ECoral_cover), len=100)))
+```
+
+```{r}
+Esp_fish1f.data1 = emmeans(Esp_fish1_inter, ~ ECoral_cover, at=Esp_fish1f_grid1, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f5C <-ggplot(Esp_fish1f.data1, aes(x = ECoral_cover)) +
+  geom_line(data= Esp_fish1f.data1, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data= Esp_fish1f.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,300,50), limits=c(0,300))+
+  scale_x_continuous(breaks=seq(0,100,10), limits=c(10,90))+
+  ylab("Abundance (Mean ± 95% CI)\n")+
+  xlab("\nCoral Cover (%)")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f5C+geom_point(data=Ebiototal_env, aes(x = ECoral_cover, y=EAbundance, fill= ECoral_cover), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(palette = "YlOrBr", trans = "reverse")
+```
+
+```{r}
+Esp_fish1f_grid1 = with(Ebiototal_env, list(EDepth = seq(min(EDepth), max(EDepth), len=100)))
+```
+
+```{r}
+Esp_fish1f.data1 = emmeans(Esp_fish1_inter, ~ EDepth, at=Esp_fish1f_grid1, type='response') %>%
+    as.data.frame
+Esp_fish1f.data1
+```
+
+```{r}
+f5D <-ggplot(Esp_fish1f.data1, aes(x = EDepth)) +
+  geom_line(data= Esp_fish1f.data1, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data= Esp_fish1f.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,300,50), limits=c(0,300))+
+  scale_x_continuous(breaks=seq(5,10,1), limits=c(5,10))+
+  ylab("Abundance (Mean ± 95% CI)\n")+
+  xlab("\nDepth (m)")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f5D+geom_point(data=Ebiototal_env, aes(x = EDepth, y=EAbundance, fill= EDepth), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(trans = "reverse")
+```
+
+# 3. INTERACTION MODEL SPECIES RICHNESS EXPERIMENTAL REMOVAL DATA SET
+
+```{r}
+Espri_fish2 <- glmmTMB(ERichness~ETreatment*ETime + ERugosity + ECoral_cover+ EDepth + (1|EQuadrat/ETime), data=Ebiototal_env,
+                  family=nbinom2(link = "log"),  REML=TRUE)
+```
+
+```{r}
+Espri_fish2_res<-simulateResiduals(Espri_fish2)
+plot(Espri_fish2_res)
+```
+
+```{r}
+Anova(Espri_fish2)
+summary(Espri_fish2)
+```
+
+```{r}
+allEffects(Espri_fish2, type="response")
+```
+
+```{r}
+Espri_fish2_grid = with(Ebiototal_env, list(ETreatment = levels(ETreatment), ETime = levels(ETime)))
+```
+
+```{r}
+Espri_fish2.data = emmeans(Espri_fish2, ~ ETreatment|ETime, at=Espri_fish2_grid, type='response') %>%
+    as.data.frame
+```
+
+```{r, GB-fig3}
+F5E<-ggplot(Espri_fish2.data,  aes(y=response, x=ETime, color=ETreatment))+
+    geom_pointrange(aes(ymin=asymp.LCL, ymax=asymp.UCL), position=position_dodge(width=0.9), size=1)+
+    geom_errorbar(aes(ymin=asymp.LCL, ymax=asymp.UCL), position=position_dodge(width=0.9), size=0.1, width=0.1)+
+  scale_y_continuous(breaks=seq(0,40,5), limits=c(0,40))+
+  
+   scale_color_manual(name = "Treatment",
+                     labels = c("High (Control)","Removal(Treatment)"),
+                     values = c("hotpink4", "black")) +
+  scale_fill_manual(name = "Treatment",
+                    labels = c("High (Control)","Removal(Treatment)"),
+                    values = c("hotpink4", "black"))+
+  scale_shape_manual(name = "Treatment",
+                     labels = c("High (Control)","Removal(Treatment)"),
+                     values = c(21, 21))+
+ 
+  ylab("Species richness (Mean±95% CI)\n")+
+  xlab("\nSampling Time")+
+  labs(colour="Treatment")+
+  theme(legend.position =c("right"), 
+        axis.title.x = element_text(color="black", size=18, face=1),
+        axis.title.y = element_text(color="black", size=18, face=1),
+        axis.text.x = element_text(colour = "black", size=14, face=1), 
+        axis.text.y = element_text(colour = "black", size=14, face=1),  
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face=1, size=12))
+F5E+ geom_point(data=Ebiototal_env, aes(x = ETime, y=ERichness, fill=ETreatment, alpha= 0.5), size=3,   shape = 21, col="black", position = position_jitterdodge(jitter.width = 0.5, jitter.height=0.4, dodge.width=0.9))
+```
+
+```{r}
+Espri_fish2_grid = with(Ebiototal_env, list(ERugosity = seq(min(ERugosity), max(ERugosity), len=100)))
+```
+
+```{r}
+Espri_fish2.data1 = emmeans(Espri_fish2, ~ERugosity, at=Espri_fish2_grid, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f5F<-ggplot(Espri_fish2.data1, aes(x=ERugosity)) +
+  geom_line(data = Espri_fish2.data1 , aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data = Espri_fish2.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,40,10), limits=c(0,40))+
+  scale_x_continuous(breaks=seq(0,1,0.1), limits=c(0.4,0.75))+
+  ylab("Species richness (Mean ± 95% CI)\n")+
+  xlab("\nSubstratum complexity")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f5F+geom_point(data=Ebiototal_env, aes(x = ERugosity, y=ERichness, fill= ETreatment), size=3, alpha=0.6, shape = 21, col="black")+
+  scale_color_manual(values = c("black","hotpink4")) +
+  scale_fill_manual(values = c("black","hotpink4"))+
+  labs(fill="Sponge cover", colour="Sponge cover")#+
+```
+
+```{r}
+Espri_fish2_grid = with(Ebiototal_env, list(ECoral_cover = seq(min(ECoral_cover), max(ECoral_cover), len=100)))
+```
+
+```{r}
+Espri_fish2.data1 = emmeans(Espri_fish2 , ~ ECoral_cover, at = Espri_fish2_grid, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f5G <-ggplot(Espri_fish2.data1, aes(x = ECoral_cover)) +
+  geom_line(data= Espri_fish2.data1, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data= Espri_fish2.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,40,10), limits=c(0,40))+
+  scale_x_continuous(breaks=seq(0,100,10), limits=c(10,90))+
+  ylab("Species richness(Mean ± 95% CI)\n")+
+  xlab("\nCoral Cover (%)")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f5G+geom_point(data=Ebiototal_env, aes(x = ECoral_cover, y=ERichness, fill= ECoral_cover), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(palette = "YlOrBr", trans = "reverse")
+```
+
+```{r}
+Espri_fish2_grid = with(Ebiototal_env, list(EDepth = seq(min(EDepth), max(EDepth), len=100)))
+```
+
+```{r}
+Espri_fish2.data1 = emmeans(Espri_fish2, ~ EDepth, at=Espri_fish2_grid, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f5H <-ggplot(Espri_fish2.data1, aes(x = EDepth)) +
+  geom_line(data= Espri_fish2.data1, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data= Espri_fish2.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,40,10), limits=c(0,40))+
+  scale_x_continuous(breaks=seq(5,10,1), limits=c(5,10))+
+  ylab("Species richness (Mean ± 95% CI)\n")+
+  xlab("\nDepth (m)")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f5H+geom_point(data=Ebiototal_env, aes(x = EDepth, y=ERichness, fill= EDepth), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(trans = "reverse")
+```

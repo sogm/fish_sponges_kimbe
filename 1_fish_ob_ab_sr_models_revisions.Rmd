@@ -1,0 +1,458 @@
+---
+title: "fish_encrusting_sponges_ecology"
+author: "SGM"
+date: '2025-04-20'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Attach the packages
+```{r}
+library(betareg)
+library(grid)
+library(dplyr)
+library(gridExtra)
+library(scales)
+library(car)
+library(ggplot2)
+library(ggfortify)
+library(broom)
+library(effects)
+library(emmeans)
+library(MASS)
+library(MuMIn)
+library(devtools)
+library(forcats)
+library(tidyverse)
+library(viridis)
+library(nlme)
+library(extrafont)
+library(DHARMa)
+library(ggrepel)
+library(glmmTMB)
+library(corrplot)
+library(caret)
+```
+
+FISHES
+##1. loading the data for all the species
+```{r}
+spofish <- read.csv("TO_BE_SPECIFIED_BY_USER/fish_asse_sp.csv", head=T, stringsAsFactors = F, fileEncoding = "latin1")
+```
+
+## 1 ENVIRONMENTAL VARIABLES
+```{r}
+env_nmds <- read.csv("TO_BE_SPECIFIED_BY_USER/environmental_data_all.csv", head=T, stringsAsFactors = F, fileEncoding = "latin1")
+```
+
+##1.3.Transforming variables Sampling and Treatment Into a factor
+```{r}
+spofish=spofish%>%mutate(Sampling=factor(Sampling),
+                         Treatment=factor(Treatment, levels=c("Low", "Med", "High")))
+```
+
+2. EPLORATORY DATA ANALYSES
+This will describe and summarize some metrics of the variables and exploratory plots to detect some trends in the data that could suggest how to follow up on this.
+```{r}
+spofishob <- spofish[spofish$Treatment%in% c("Low","Med", "High"), ]     
+spofishex <- spofish[spofish$Treatment == "Removal", ] 
+```
+
+Sub-setting to separate observational and experimental data in different matrices for environmental variables
+```{r}
+env_ob_nmds<-env_nmds[env_nmds$Treatment %in% c("Low", "Med", "High"),]
+env_ex_nmds<- env_nmds[env_nmds$Treatment=="Removal",]
+```
+
+#3 TOTAL ABUNDANCE AND SPECIES RICHNESS BY SPONGE COVER
+```{r}
+SE=function(x) {sd(x)/sqrt(length(x))}#standard error function
+```
+
+```{r}
+spofishob$ID<-seq.int(nrow(spofishob))
+```
+
+```{r}
+spofishobsum<-spofishob %>% rowwise (ID) 
+```
+
+```{r}
+spofishobsum <-spofishobsum %>% mutate(total=sum(c_across(5:183)))# abundance
+ab <- spofishobsum %>% group_by(Treatment) %>% summarize(Abundance=mean(total), SE=SE(total)) %>% ungroup()
+```
+
+```{r}
+spofishobsum<-spofishobsum %>% mutate(Richness=sum(c_across(5:183)>0))# species richness
+ri<-spofishobsum %>% group_by (Treatment) %>% summarize(Richnessmean=mean(Richness), SEr=SE(Richness))
+```
+
+8.1 ABUNDANCE MODEL:DATA MATRIX WITH ABUNDANCE, RICHNESS AND ALL ENVIRONMENTAL VARIABLES
+```{r}
+Abundance = spofishobsum$total# column of abundance 144 points
+Richness = spofishobsum$Richness# column of Richness 144 points
+Sampling = spofishobsum$Sampling# column of Sampling 144 points
+Sponge_coverf = spofishobsum$Treatment# column of treatment 144 points
+Quadrat = spofishobsum$Quadrat# column of Quadrat 144 points
+Quadrat_code = spofishobsum$Quadrat_code# column of Quadrat_code 144 points
+Depth = env_ob_nmds$Depth# column of depth 144 points
+Sponge_cover = env_ob_nmds$Sponge_cover # column of sponge_cover 144 points
+Rugosity = env_ob_nmds$ Rugosity# column of rugosity 144 points
+Coral_cover = env_ob_nmds$ Coral_Cover # column of coral_cover 144 points
+Other_cover = env_ob_nmds$ Other_cover # column of other_cover 144 points
+biototal_env = data.frame (Abundance, Richness, Sampling, Sponge_coverf, Quadrat, Quadrat_code, Depth, Sponge_cover, Rugosity, Coral_cover, Other_cover)
+```
+
+```{r}
+set.seed(8)
+```
+
+```{r}
+#Correlations
+enviro_cor <- biototal_env [,c(7:11)]
+enviro_cor2 <- na.omit(enviro_cor)
+c <-cor(enviro_cor2)
+corrplot(c, method = 'number', order = 'alphabet')
+cor_spon <- findCorrelation(
+  c,
+  cutoff = 0.6,
+  verbose = TRUE,
+  names = TRUE,
+  exact = TRUE # Whether average correlation should be recomputed at each step
+)
+cor_spon
+```
+
+```{r}
+biototal_env<-biototal_env %>% mutate(Sponge_coverf = factor(Sponge_coverf, levels=c("Low", "Med", "High"))) 
+```
+
+```{r}
+sp_fish1f<-glmmTMB(Abundance~Sponge_coverf+Rugosity+Coral_cover+Depth+(1|Quadrat/Sampling), data=biototal_env,
+                  family=nbinom2(link = "log"),  REML=TRUE)#nbinom2
+```
+
+```{r}
+sp_fish1f_res<-simulateResiduals(sp_fish1f)
+plot(sp_fish1f_res)
+```
+
+```{r}
+Anova(sp_fish1f)
+summary(sp_fish1f)
+```
+
+```{r}
+plot(allEffects(sp_fish1f, type="response"))
+```
+
+```{r}
+sp_fish1f_grid = with(biototal_env, list(Sponge_coverf = levels(Sponge_coverf), len=100))
+```
+
+```{r}
+sp_fish1f.data = emmeans(sp_fish1f, ~ Sponge_coverf, at=sp_fish1f_grid, type='response') %>%  as.data.frame
+```
+
+```{r, warning=F}
+sp_fish1f.sum<-sp_fish1f.data%>%
+  group_by(Sponge_coverf) %>% 
+  median_hdci(.width=c(0.8,0.95))
+```
+
+```{r, GB-fig3}
+f1<-ggplot(sp_fish1f.data, aes(y=response, x=Sponge_coverf, color=Sponge_coverf))+
+    geom_pointrange(aes(ymin=asymp.LCL, ymax=asymp.UCL), position=position_dodge(width=1), size=1)+
+    geom_errorbar(aes(ymin=asymp.LCL, ymax=asymp.UCL), position=position_dodge(width=0.9), size=0.2, width=0.2)+
+  scale_y_continuous(breaks=seq(0,250,50), limits=c(0,250))+
+  scale_color_manual(values = c("darkorange2","#35978f","hotpink4")) +
+  scale_fill_manual(values = c("darkorange2","#35978f","hotpink4"))+
+  ylab("Abundance (Mean±95%CI)\n")+
+  xlab("\nSponge cover")+
+  labs(colour="Treatment")+
+  theme(legend.position =c("none"), 
+        axis.title.x = element_text(color="black", size=18, face=1),
+        axis.title.y = element_text(color="black", size=18, face=1),
+        axis.text.x = element_text(colour = "black", size=14, face=1), 
+        axis.text.y = element_text(colour = "black", size=14, face=1 ),  
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f1 +
+geom_point(data=biototal_env, aes(x = Sponge_coverf, y=Abundance, fill= Sponge_coverf, alpha= 0.5), size=3,   shape = 21, col="black", position = position_jitterdodge(jitter.width = 1.5, jitter.height=0.4, dodge.width=0.9))
+```
+
+```{r}
+sp_fish1f_grid1 = with(biototal_env, list(Rugosity = seq(min(Rugosity), max(Rugosity), len=100)))
+```
+
+```{r}
+sp_fish1f.data1 = emmeans(sp_fish1f, ~Rugosity, at=sp_fish1f_grid1, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f2<-ggplot(sp_fish1f.data1 , aes(x=Rugosity)) +
+  geom_line(data= sp_fish1f.data1, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data=sp_fish1f.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,250,50), limits=c(0,250))+
+  scale_x_continuous(breaks=seq(0,1,0.1), limits=c(0.4,0.8))+
+  ylab("Abundance (Mean ± 95% CI)\n")+
+  xlab("\nSubstratum complexity")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f2+geom_point(data=biototal_env, aes(x = Rugosity, y=Abundance, fill= Sponge_coverf), size=3,   shape = 21, col="black")+
+  scale_color_manual(values = c("darkorange2","#35978f","hotpink4")) +
+  scale_fill_manual(values = c("darkorange2","#35978f","hotpink4"))+
+  labs(fill="Sponge cover", colour="Sponge cover")#+
+```
+
+```{r}
+sp_fish1f_grid1 = with(biototal_env, list(Coral_cover = seq(min(Coral_cover), max(Coral_cover), len=100)))
+```
+
+```{r}
+sp_fish1f.data1 = emmeans(sp_fish1f, ~ Coral_cover, at=sp_fish1f_grid1, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f3 <-ggplot(sp_fish1f.data1, aes(x = Coral_cover)) +
+  geom_line(data= sp_fish1f.data1, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data=sp_fish1f.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,250,50), limits=c(0,250))+
+  scale_x_continuous(breaks=seq(0,100,10), limits=c(10,90))+
+  ylab("Abundance (Mean ± 95% CI)\n")+
+  xlab("\nCoral Cover (%)")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f3+geom_point(data=biototal_env, aes(x = Coral_cover, y=Abundance, fill= Coral_cover), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(palette = "YlOrBr", trans = "reverse")
+```
+
+```{r}
+sp_fish1f_grid1 = with(biototal_env, list(Depth = seq(min(Depth), max(Depth), len=100)))
+```
+
+```{r}
+sp_fish1f.data1 = emmeans(sp_fish1f, ~ Depth, at=sp_fish1f_grid1, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f4 <-ggplot(sp_fish1f.data1, aes(x = Depth)) +
+  geom_line(data= sp_fish1f.data1, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data=sp_fish1f.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,250,50), limits=c(0,250))+
+  scale_x_continuous(breaks=seq(5,10,1), limits=c(5,10))+
+  ylab("Abundance (Mean ± 95% CI)\n")+
+  xlab("\nDepth (m)")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f4+geom_point(data=biototal_env, aes(x = Depth, y=Abundance, fill= Depth), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(trans = "reverse")
+```
+
+# 8.2 SPECIES RICHNESS MODEL:DATA MATRIX WITH ABUNDANCE, RICHNESS AND ALL ENVIRONMENTAL VARIABLES
+```{r}
+spri_fish1f<-glmmTMB(Richness~Sponge_coverf+Rugosity+Coral_cover+Depth+(1|Quadrat/Sampling), data=biototal_env,
+                  family=nbinom2(link = "log"),  REML=TRUE)
+```
+
+```{r}
+spri_fish1f_res<-simulateResiduals(sp_fish1f)
+plot(spri_fish1f_res)
+```
+
+```{r}
+Anova(spri_fish1f)
+summary(spri_fish1f)
+```
+
+```{r}
+plot(allEffects(spri_fish1f, type="response"))
+```
+
+```{r}
+spri_fish1f_grid = with(biototal_env, list(Sponge_coverf = levels(Sponge_coverf), len=100))
+```
+
+```{r}
+spri_fish1f.data = emmeans(spri_fish1f, ~Sponge_coverf, at=spri_fish1f_grid, type='response') %>%
+    as.data.frame
+spri_fish1f.data 
+```
+
+```{r, GB-fig3}
+f5<-ggplot(spri_fish1f.data, aes(y=response, x=Sponge_coverf, color=Sponge_coverf))+
+    geom_pointrange(aes(ymin=asymp.LCL, ymax=asymp.UCL), position=position_dodge(width=0.9), size=1)+
+    geom_errorbar(aes(ymin=asymp.LCL, ymax=asymp.UCL), position=position_dodge(width=0.9), size=0.1, width=0.1)+
+  scale_y_continuous(breaks=seq(0,40,10), limits=c(0,40))+
+  scale_color_manual(values = c("darkorange2","#35978f","hotpink4")) +
+  scale_fill_manual(values = c("darkorange2","#35978f","hotpink4"))+
+  ylab("Species richness (Mean ± 95% CI)\n")+
+  xlab("\nSponge cover")+
+  labs(colour="Treatment")+
+  theme(legend.position =c("none"), 
+        axis.title.x = element_text(color="black", size=21, face=1),
+        axis.title.y = element_text(color="black", size=21, face=1),
+        axis.text.x = element_text(colour = "black", size=16, face=1),
+        axis.text.y = element_text(colour = "black", size=16, face=1), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f5 + geom_point(data=biototal_env, aes(x = Sponge_coverf, y=Richness, fill= Sponge_coverf, alpha= 0.5), size=3,   shape = 21, col="black", position = position_jitterdodge(jitter.width = 1.5, jitter.height=0.4, dodge.width=0.9))
+```
+
+```{r}
+spri_fish1f_grid1 = with(biototal_env, list(Rugosity = seq(min(Rugosity), max(Rugosity), len=100)))
+```
+
+```{r}
+spri_fish1f.data1 = emmeans(spri_fish1f, ~ Rugosity, at = spri_fish1f_grid1, type='response') %>%as.data.frame
+```
+
+```{r}
+f6<-ggplot(spri_fish1f.data1 , aes(x=Rugosity)) +
+  geom_line(data= spri_fish1f.data1, aes(y=response), size=1, color="black", fill="black") + geom_ribbon(data=spri_fish1f.data1,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,40,10), limits=c(0,40))+
+  scale_x_continuous(breaks=seq(0,1,0.1), limits=c(0.4,0.8))+
+  ylab("Species richness (Mean±95%CI)\n")+
+  xlab("\nSubstratum rugosity")+
+    theme(legend.position =, 
+        axis.title.x = element_text(color="black", size=18, face=1),
+        axis.title.y = element_text(color="black", size=18, face=1),
+        axis.text.x = element_text(colour = "black", size=14, face=1),
+        axis.text.y = element_text(colour = "black", size=14, face=1), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face=1, size=14))
+f6+geom_point(data=biototal_env, aes(x = Rugosity, y=Richness, fill= Sponge_coverf), size=3,   shape = 21,col="black")+
+  scale_color_manual(values = c("darkorange2","#35978f","hotpink4")) +
+  scale_fill_manual(values = c("darkorange2","#35978f","hotpink4"))+
+  labs(fill="Sponge cover", colour="Sponge cover")#+
+```
+
+```{r}
+spri_fish1f_grid = with(biototal_env, list(Coral_cover = seq(min(Coral_cover), max(Coral_cover), len=100)))
+```
+
+```{r}
+spri_fish1f.data = emmeans(spri_fish1f, ~ Coral_cover, at=spri_fish1f_grid, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f7 <-ggplot(spri_fish1f.data, aes(x = Coral_cover)) +
+  geom_line(data= spri_fish1f.data, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data=spri_fish1f.data,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,40,10), limits=c(0,40))+
+  scale_x_continuous(breaks=seq(0,100,10), limits=c(10,90))+
+  ylab("Species richness (Mean±95%CI)\n")+
+  xlab("\nCoral Cover (%)")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f7+geom_point(data=biototal_env, aes(x = Coral_cover, y=Richness, fill= Coral_cover), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(palette = "YlOrBr", trans = "reverse")
+```
+
+```{r}
+spri_fish1f_grid = with(biototal_env, list(Depth = seq(min(Depth), max(Depth), len=100)))
+```
+
+```{r}
+spri_fish1f.data = emmeans(spri_fish1f, ~ Depth, at=spri_fish1f_grid, type='response') %>%
+    as.data.frame
+```
+
+```{r}
+f8 <-ggplot(spri_fish1f.data, aes(x = Depth)) +
+  geom_line(data= spri_fish1f.data, aes(y=response), size=1, color="black", fill="black") +
+  geom_ribbon(data=spri_fish1f.data,  aes(ymin=asymp.LCL, ymax=asymp.UCL), color="#35978f", fill="#35978f", alpha=0.6)+
+  scale_y_continuous(breaks=seq(0,40,10), limits=c(0,40))+
+  scale_x_continuous(breaks=seq(5,10,1), limits=c(5,10))+
+  ylab("Species richness (Mean±95%CI)\n")+
+  xlab("\nCoral Cover")+
+  theme(legend.position =c(), 
+        axis.title.x = element_text(color="black", size=18, face="bold"),
+        axis.title.y = element_text(color="black", size=18, face="bold"),
+        axis.text.x = element_text(colour = "black", size=14, face="bold"),
+        axis.text.y = element_text(colour = "black", size=14, face="bold" ), 
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        legend.background = element_rect(fill = "white"),
+        legend.key = element_rect(fill = "white", color = NA))+
+        theme(text=element_text(family="Times", face="bold", size=12))
+f8+geom_point(data=biototal_env, aes(x = Depth, y=Richness, fill= Depth), size=3,   shape = 21, col="black")+
+  scale_fill_distiller(trans = "reverse")
+```
+
+
+
+
+

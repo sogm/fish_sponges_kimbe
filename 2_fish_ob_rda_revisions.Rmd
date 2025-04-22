@@ -1,0 +1,331 @@
+---
+title: "fish_encrusting_sponges_ecology"
+author: "SGM"
+date: '2025-04-17'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Attach the packages
+```{r}
+library(betareg)
+library(grid)
+library(dplyr)
+library(gridExtra)
+library(scales)
+library(car)
+library(ggplot2)
+library(ggfortify)
+library(broom)
+library(vegan)
+library(devtools)
+library(tidybayes)
+library(forcats)
+library(tidyverse)
+library(BiodiversityR) 
+library(nlme)
+library(extrafont)
+```
+
+FISHES
+##1. loading the data for all the species
+```{r}
+spofish <- read.csv("TO_BE_SET_BY_USER/fish_asse_sp.csv", head=T, stringsAsFactors = F, fileEncoding = "latin1")
+```
+
+## 1 ENVIRONMENTAL VARIABLES
+```{r}
+env_nmds <- read.csv("TO_BE_SET_BY_USER/environmental_data_all.csv", head=T, stringsAsFactors = F, fileEncoding = "latin1")
+```
+
+##1.3.Transforming variables Sampling and Treatment Into a factor
+```{r}
+spofish=spofish%>%mutate(Sampling=factor(Sampling),
+                         Treatment=factor(Treatment, levels=c("Low", "Med", "High")))
+```
+
+2. DATA PREPARATION
+```{r}
+spofishob <- spofish[spofish$Treatment%in% c("Low","Med", "High"), ]     
+spofishex <- spofish[spofish$Treatment == "Removal", ] 
+```
+Sub-setting to separate observational and experimental data in different matrices for environmental variables
+```{r}
+env_ob_nmds<-env_nmds[env_nmds$Treatment %in% c("Low", "Med", "High"),]
+env_ex_nmds<- env_nmds[env_nmds$Treatment=="Removal",]
+```
+
+```{r}
+sp_ob_nmdsr <- spofishob[,c(-1,-2,-3,-4,-5)]
+env_ob_nmsr <- env_ob_nmds[,c(-1,-2,-3,-4,-5)]
+```
+
+#MULTIVARIATE ANALYSIS NMDS
+
+### 2. TRANSFORMATION FOR THE DATA
+```{r}
+spofishob.TRAN.WIS=wisconsin(spofishob[,c(-1,-2,-3,-4)])
+spofishobfactor=spofishob[,-c(3:144)]
+```
+
+### 3 MEASURES OF DISTANCE: BRAY CURTIS
+```{r}
+dist.WISob.bray<- vegdist(spofishob.TRAN.WIS, method="bray")
+```
+
+#######################################################################################################################################
+
+###  ADONIS Permutational Multivariate Analysis of Variance - adonis Fish on sponges 
+###  Environmental data preparation 
+
+Data matrix only with my variables of interest Sampling
+```{r}
+env_ob_nmds2 =(env_ob_nmds[,c(-4:-10)])
+env_ob_nmds2<-env_ob_nmds2 %>% mutate(Treatment=factor(Treatment))
+env_ob_nmds <- env_ob_nmds %>% mutate(Treatment=factor(Treatment),
+                                      Sampling=factor(Sampling))
+```
+
+```{r}
+h1 <- with(env_ob_nmds, how(nperm = 999, blocks = Sampling))
+env_ob_nmds.adonis <- adonis2(dist.WISob.bray~ Treatment+Rugosity+ Coral_Cover+ Depth, data=env_ob_nmds, permutations = h1)
+env_ob_nmds.adonis 
+```
+#######################################################################################################################################
+
+## RDA 1 FISH COMMUNITY AND SPONGE COVER AND STRUCTURAL VARIABLES
+```{r}
+sp_ob_rda <- sp_ob_nmdsr
+env_ob_rda <- env_ob_nmds %>% mutate(Treatment=factor(Treatment))
+```
+
+```{r}
+attach(env_ob_rda)
+```
+
+```{r}
+f_hel <- disttransform(sp_ob_rda, method='hellinger')# The function is in BiodiversityR not in vegan
+```
+
+```{r}
+h1 <- with(env_ob_rda, how(nperm = 999, blocks = Sampling))
+f_rda<- rda(f_hel ~Sponge_cover+ Rugosity + Coral_Cover+ Depth, data=env_ob_rda, permutations = h1) #scale = T,
+```
+
+```{r}
+summary(f_rda)
+```
+
+```{r}
+fwd.sel <- ordiR2step(rda(f_hel ~ 1, data = env_ob_rda), # lower model limit (simple!)
+                      scope = formula(f_rda), # upper model limit (the "full" model)
+                      direction = "forward",
+                      R2scope = TRUE, # can't surpass the "full" model's R2
+                      pstep = 1000,
+                      trace = FALSE) # change to TRUE to see the selection process!
+```
+
+```{r}
+fwd.sel$call
+```
+
+```{r}
+RsquareAdj(f_rda)
+```
+
+```{r}
+anova.cca(f_rda, step = 1000)
+anova.cca(f_rda, step = 1000, by = "term")
+anova.cca(f_rda, step = 1000, by = "axis")
+```
+
+```{r}
+ordiplot(f_rda, scaling = 1)#type = "text"
+```
+#Scaling 1 shows similarities between objects in the response matrix.
+#Sites (numbers) that are closer together have more similar communities.
+#Species that are closer together occupy more sites in common.
+```{r}
+ordiplot(f_rda, scaling = 2)#type = "text"
+```
+#Scaling 2 shows the effects of explanatory variables.
+#Longer arrows mean this variable strongly drives the variation in the community matrix.
+
+```{r}
+perc <- round(100*(summary(f_rda)$cont$importance[2, 1:2]), 2)
+sc_si <- scores(f_rda, display="sites", choices=c(1,2), scaling=1)
+sc_sp <- scores(f_rda, display="species", choices=c(1,2), scaling=1)
+sc_bp <- scores(f_rda, display="bp", choices=c(1, 2), scaling=1)
+```
+
+```{r}
+sc_si_df<- as.data.frame(sc_si)
+sc_si_df$row_names<-row.names(sc_si_df)
+colnames(sc_si_df)[3] = "site_names"
+```
+
+```{r}
+sc_si_df_1 = data.frame(RDA1 = sc_si_df$RDA1, 
+                        RDA2 = sc_si_df$RDA2, 
+                        Treatment = env_ob_rda$Treatment,
+                        Sponge_cover = env_ob_rda$Sponge_cover,
+                        Rugosity = env_ob_rda$Rugosity, 
+                        Coral_Cover = env_ob_rda$Coral_Cover,
+                        Depth = env_ob_rda$Depth)
+```
+
+```{r}
+sc_si_df_1 <- sc_si_df_1 %>% mutate (Treatment=factor(Treatment, levels=c("Low", "Med", "High")))
+```
+
+```{r}
+sc_bp_df<- as.data.frame(sc_bp)
+sc_bp_df$row_names<-row.names(sc_bp_df)
+colnames(sc_bp_df)[3] = "Enviro_var"
+```
+
+```{r}
+sc_sp_df<- as.data.frame(sc_sp)
+sc_sp_df$row_names<-row.names(sc_sp_df)
+```
+
+```{r}
+sc_sp_df_1=data.frame(RDA1 = sc_sp_df$RDA1, 
+                      RDA2 = sc_sp_df$RDA2, 
+                      Fish_sp = sc_sp_df$row_names)
+```
+
+```{r, warning=FALSE}
+species_importance <- ordiplot(f_rda, choices=c(1,2))
+spec.envfit <- envfit(species_importance, env=f_hel)
+spec.data.envfit <- data.frame(r=spec.envfit$vectors$r, p=spec.envfit$vectors$pvals)
+species.long2 <- species.long(species_importance, spec.data=spec.data.envfit)
+species_importance_f <- species.long2[species.long2$p <= 0.05,  ]#
+species_importance_f
+```
+
+```{r}
+#write_xlsx(species_importance_f,"TO_BE_SET_BY_USER/species_rda_ob_p005_2nd.xlsx")
+```
+
+```{r}
+BioR.theme <- theme(
+  panel.background = element_blank(),
+  panel.border =  element_blank(),
+  panel.grid = element_blank(),
+  axis.line = element_line("gray25"),
+  text = element_text(size = 12),
+  axis.text = element_text(size = 10, colour = "gray25"),
+  axis.title = element_text(size = 14, colour = "gray25"),
+  legend.title = element_text(size = 14),
+  legend.text = element_text(size = 14),
+  legend.key = element_blank())
+```
+
+```{r}
+#pdf(file="C:/Users/sgonzalezmur/Desktop/Manusrevision/Fish_sponges_assemblage_ecology/Ecosphere_submission/Revisions/Figure_4_r001_p005.pdf", width=10, height=7, colormodel='cmyk')
+all_plot <- ggplot() + 
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+  xlab("RDA1 69%") +
+  ylab("RDA2 15%") +  
+  scale_x_continuous(breaks=seq(-0.2,0.2,0.1), limits=c(-0.25,0.25), sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  scale_y_continuous(breaks=seq(-0.2,0.2,0.1), limits=c(-0.25,0.25), sec.axis = dup_axis(labels=NULL, name=NULL)) +
+   geom_segment(data=sc_bp_df,
+               aes(x=0, y=0, xend=(RDA1), yend=(RDA2)),
+               colour="black", linewidth=0.3, arrow=arrow()) +
+   geom_text_repel(data=sc_bp_df,
+                  aes(x=(RDA1*1.3), y=(RDA2*1.3), label=Enviro_var),
+                  colour="black") +
+
+  geom_segment(data=species_importance_f,
+               aes(x=0, y=0, xend=(axis1/1.5), yend=(axis2/1.5)),
+               colour="green4", linewidth=0.3, arrow=arrow())+
+  geom_text_repel(data=species_importance_f,
+                  aes(x=(axis1/1.3), y=(axis2/1.3), label=species_importance_f$labels),
+                  colour="black", size = 1)+
+  
+  # geom_point(data=species_importance_f,
+  # aes(x=axis1/2, y=axis2/2),
+  # color="black",
+  # shape = 23,
+  # fill = "green4",
+  # size = 3) +
+  # geom_text_repel(data = species_importance_f,
+  #             aes(x=axis1/2, y=axis2/2, label = species_importance_f$labels),
+  #            colour="black") +
+  # 
+  geom_point(data=sc_si_df_1,
+             aes(x=RDA1, y=RDA2,
+                 colour=sc_si_df_1$Treatment,
+                 fill=sc_si_df_1$Treatment,
+                 shape=sc_si_df_1$Treatment),
+             size = 2) +
+
+  scale_colour_manual (name= "Treatment",
+                      labels=c("Low","Med","High"),
+                      values=c("black", "black","black"))+ 
+  scale_fill_manual   (name= "Treatment",
+                      labels=c("Low","Med","High"),
+                      values=c("darkorange2","#35978f","hotpink4"))+ 
+  scale_shape_manual  (name = "Treatment",
+                      labels=c("Low","Med","High"),
+                      values = c(21,22,24))+
+ 
+   stat_ellipse(data = sc_si_df_1, aes(x=RDA1, y= RDA2, fill = Treatment, color = Treatment), geom="polygon",level=0.95, alpha=0.2) +
+    BioR.theme
+all_plot
+```
+
+```{r}
+all_plot2 <- ggplot() + 
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+  xlab("RDA1 69%") +
+  ylab("RDA2 15%") +  
+  scale_x_continuous(breaks=seq(-0.2,0.2,0.1), limits=c(-0.25,0.25), sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  scale_y_continuous(breaks=seq(-0.2,0.2,0.1), limits=c(-0.25,0.25), sec.axis = dup_axis(labels=NULL, name=NULL)) +
+   geom_segment(data=sc_bp_df, 
+               aes(x=0, y=0, xend=(RDA1), yend=(RDA2)), 
+               colour="black", linewidth=0.3, arrow=arrow()) +
+   geom_text_repel(data=sc_bp_df, 
+                  aes(x=(RDA1*1.3), y=(RDA2*1.3), label=Enviro_var),
+                  colour="black") +
+  
+   
+  geom_segment(data=species_importance_f, 
+               aes(x=0, y=0, xend=(axis1), yend=(axis2)), 
+               colour="green4", linewidth=0.3, arrow=arrow())+
+  geom_text_repel(data=species_importance_f, 
+                  aes(x=(axis1*1.3), y=(axis2*1.3), label=species_importance_f$labels),
+                  colour="black") +
+  
+  #geom_point(data=species_importance_f, 
+             #aes(x=axis1/2, y=axis2/2),
+             #color="black", 
+             #shape = 23, 
+             #fill = "green4",
+             #size = 3) +
+    #geom_text_repel(data = species_importance_f, 
+     #             aes(x=axis1/2, y=axis2/2, label = species_importance_f$labels),
+      #            colour="black") +
+  
+ scale_colour_manual (name= "Treatment",
+                      labels=c("Low","Med","High"),
+                      values=c("black", "black","black"))+ 
+  scale_fill_manual   (name= "Treatment",
+                      labels=c("Low","Med","High"),
+                      values=c("darkorange2","#35978f","hotpink4"))+ 
+  scale_shape_manual  (name = "Treatment",
+                      labels=c("Low","Med","High"),
+                      values = c(21,22,24))+
+ 
+   stat_ellipse(data = sc_si_df_1, aes(x=RDA1, y= RDA2, fill = Treatment, color = Treatment), geom="polygon",level=0.95, alpha=0.2) +
+    BioR.theme
+
+all_plot2
+```
+ 
